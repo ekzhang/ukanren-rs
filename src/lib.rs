@@ -1,4 +1,4 @@
-//! An implementation of the microKanren relational programming system in Rust.
+//! An implementation of the _µKanren_ relational programming system in Rust.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -9,7 +9,7 @@ use std::fmt::Debug;
 use itertools::{Interleave, Itertools};
 use rpds::vector::Vector;
 
-/// An object in microKanren that can be unified.
+/// An object in µKanren that can be unified.
 #[derive(Debug)]
 pub enum Value {
     /// A variable with a specific ID.
@@ -99,7 +99,7 @@ impl<T: Into<Value>> From<Vec<T>> for Value {
 ///
 /// We use a persistent vector both for performance reasons, and to satisfy
 /// Rust's ownership rules for [`Value`],
-type State = Vector<Option<Value>>;
+pub type State = Vector<Option<Value>>;
 
 fn walk(u: &Value, s: &State) -> Value {
     match u {
