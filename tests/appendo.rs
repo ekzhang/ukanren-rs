@@ -49,3 +49,31 @@ fn inverse_append() {
         ]
     );
 }
+
+fn reverseo(first: Value, second: Value) -> BoxedGoal<impl Iterator<Item = State>> {
+    eq(&first, &())
+        .and(eq(&second, &()))
+        .or(fresh(move |a: Value, d: Value| {
+            let second = second.clone();
+            eq(&(a.clone(), d.clone()), &first).and(fresh(move |rd: Value| {
+                appendo(rd.clone(), (a.clone(), ()).to_value(), second.clone())
+                    .and(reverseo(d.clone(), rd.clone()))
+            }))
+        }))
+        .boxed()
+}
+
+#[test]
+fn reverse_basic() {
+    let goal = fresh(|x| reverseo(x, [1, 2, 3, 4, 5].to_value()));
+    assert_eq!(
+        goal.run(1).collect::<Vec<_>>(),
+        vec![state![[5, 4, 3, 2, 1]]],
+    );
+}
+
+#[test]
+fn palindrome() {
+    let goal = fresh(|x: Value| reverseo(x.clone(), x));
+    assert!(goal.run(1).take(10).collect::<Vec<_>>().len() == 10);
+}
