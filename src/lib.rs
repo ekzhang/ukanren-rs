@@ -221,7 +221,10 @@ macro_rules! state_inner {
 }
 
 /// Goal for unifying two values.
-pub fn eq(u: &impl ToValue, v: &impl ToValue) -> impl Goal<Iter = impl Iterator<Item = State>> {
+pub fn eq(
+    u: &impl ToValue,
+    v: &impl ToValue,
+) -> impl Goal<Iter = impl Iterator<Item = State>> + Clone + 'static {
     let u = u.to_value();
     let v = v.to_value();
     move |s: &State| unify(&u, &v, s).into_iter()
@@ -243,9 +246,9 @@ fn unify(u: &Value, v: &Value, s: &State) -> Option<State> {
 }
 
 /// Goal that introduces one or more fresh relational variables.
-pub fn fresh<F, I, T>(f: F) -> impl Goal<Iter = I>
+pub fn fresh<F, I, T>(f: F) -> impl Goal<Iter = I> + Clone + 'static
 where
-    F: Fresh<T, Iter = I>,
+    F: Fresh<T, Iter = I> + Clone + 'static,
     I: Iterator<Item = State>,
 {
     move |s: &State| f.call_fresh(s)
@@ -285,6 +288,12 @@ macro_rules! impl_fresh {
 
 impl_fresh!(1; 0);
 impl_fresh!(2; 0, 1);
+impl_fresh!(3; 0, 1, 2);
+impl_fresh!(4; 0, 1, 2, 3);
+impl_fresh!(5; 0, 1, 2, 3, 4);
+impl_fresh!(6; 0, 1, 2, 3, 4, 5);
+impl_fresh!(7; 0, 1, 2, 3, 4, 5, 6);
+impl_fresh!(8; 0, 1, 2, 3, 4, 5, 6, 7);
 
 /// A goal that can be executed by the relational system.
 pub trait Goal {
@@ -456,6 +465,15 @@ mod tests {
     fn two_equal() {
         let mut iter = fresh(|x, y| eq(&x, &y)).run();
         assert_eq!(iter.next(), Some(state![(@1), _]));
+        assert_eq!(iter.next(), None);
+    }
+
+    #[test]
+    fn multi_equal() {
+        let mut iter =
+            fresh(|x, y, z, w| eq(&x, &y).and(eq(&z, &w)).or(eq(&x, &z).and(eq(&y, &w)))).run();
+        assert_eq!(iter.next(), Some(state![(@1), _, (@3), _]));
+        assert_eq!(iter.next(), Some(state![(@2), (@3), _, _]));
         assert_eq!(iter.next(), None);
     }
 }
