@@ -237,8 +237,15 @@ fn unify(u: &Value, v: &Value, s: &State) -> Option<State> {
         (Value::Variable(u), Value::Variable(v)) if u == v => Some(s.clone()),
         (Value::Variable(u), v) => Some(s.extend(u, v)),
         (u, Value::Variable(v)) => Some(s.extend(v, u)),
-        (Value::List(_u), Value::List(_v)) => {
-            todo!()
+        (Value::List(u), Value::List(v)) => {
+            if u.len() != v.len() {
+                return None;
+            }
+            let mut s = s.clone();
+            for i in 0..u.len() {
+                s = unify(&u[i], &v[i], &s)?;
+            }
+            Some(s)
         }
         (u @ Value::Atom(_), v @ Value::Atom(_)) if u == v => Some(s.clone()),
         _ => None,
@@ -474,6 +481,13 @@ mod tests {
             fresh(|x, y, z, w| eq(&x, &y).and(eq(&z, &w)).or(eq(&x, &z).and(eq(&y, &w)))).run();
         assert_eq!(iter.next(), Some(state![(@1), _, (@3), _]));
         assert_eq!(iter.next(), Some(state![(@2), (@3), _, _]));
+        assert_eq!(iter.next(), None);
+    }
+
+    #[test]
+    fn list_equal() {
+        let mut iter = fresh(|x, y| eq(&[x, y], &["hello", "world"])).run();
+        assert_eq!(iter.next(), Some(state!["hello", "world"]));
         assert_eq!(iter.next(), None);
     }
 }
