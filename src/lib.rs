@@ -13,26 +13,16 @@ use itertools::{Interleave, Itertools};
 use rpds::Vector;
 
 /// An object in µKanren that can be unified.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Value {
     /// A variable with a specific ID.
     Variable(usize),
 
     /// An atomic term, compared for basic equality.
-    Atom(Box<dyn Atom>),
+    Atom(Rc<dyn Atom>),
 
-    /// A list containing multiple values.
-    List(Vec<Value>),
-}
-
-impl Clone for Value {
-    fn clone(&self) -> Self {
-        match self {
-            Self::Variable(n) => Self::Variable(*n),
-            Self::Atom(x) => Self::Atom(x.box_clone()),
-            Self::List(v) => Self::List(v.clone()),
-        }
-    }
+    /// A cons cell containing a pair of values.
+    Cons(Rc<Value>, Rc<Value>),
 }
 
 impl PartialEq for Value {
@@ -40,7 +30,7 @@ impl PartialEq for Value {
         match (self, other) {
             (Value::Variable(x), Value::Variable(y)) => x == y,
             (Value::Atom(x), Value::Atom(y)) => x.eq(y.as_ref()),
-            (Value::List(x), Value::List(y)) => x == y,
+            (Value::Cons(x1, x2), Value::Cons(y1, y2)) => x1 == y1 && x2 == y2,
             _ => false,
         }
     }
@@ -55,12 +45,9 @@ pub trait Atom: Debug {
 
     /// Convert this reference to an [`Any`] reference.
     fn as_any(&self) -> &dyn Any;
-
-    /// Clone the current atom in boxed form.
-    fn box_clone(&self) -> Box<dyn Atom>;
 }
 
-impl<T: 'static + Eq + Debug + Clone> Atom for T {
+impl<T: 'static + Eq + Debug> Atom for T {
     fn eq(&self, other: &dyn Atom) -> bool {
         match other.as_any().downcast_ref() {
             Some(other) => self.eq(other),
@@ -70,10 +57,6 @@ impl<T: 'static + Eq + Debug + Clone> Atom for T {
 
     fn as_any(&self) -> &dyn Any {
         self
-    }
-
-    fn box_clone(&self) -> Box<dyn Atom> {
-        Box::new(self.clone())
     }
 }
 
@@ -93,7 +76,7 @@ macro_rules! impl_atom_to_value {
     ($t:ty) => {
         impl ToValue for $t {
             fn to_value(&self) -> Value {
-                Value::Atom(Box::new(self.clone()))
+                Value::Atom(Rc::new(*self))
             }
         }
     };
@@ -105,25 +88,44 @@ macro_rules! impl_atom_to_value {
 }
 
 impl_atom_to_value!(i8, u8, i16, u16, i32, u32, i64, u64, i128, u128, isize, usize);
-impl_atom_to_value!(bool, char);
+impl_atom_to_value!(bool, char, ());
 impl_atom_to_value!(&'static str);
-impl_atom_to_value!(String);
+
+/// Construct a cons cell from two values.
+pub fn cons(u: &impl ToValue, v: &impl ToValue) -> Value {
+    Value::Cons(Rc::new(u.to_value()), Rc::new(v.to_value()))
+}
+
+/// Construct a list out of cons cells.
+pub fn list<'a>(items: impl IntoIterator<Item = &'a (impl ToValue + 'a)>) -> Value {
+    let mut it = items.into_iter();
+    match it.next() {
+        Some(v) => cons(v, &list(it)),
+        None => ().to_value(),
+    }
+}
 
 impl<T: ToValue, const N: usize> ToValue for [T; N] {
     fn to_value(&self) -> Value {
-        Value::List(self.iter().map(ToValue::to_value).collect())
+        list(self)
     }
 }
 
 impl<T: ToValue> ToValue for [T] {
     fn to_value(&self) -> Value {
-        Value::List(self.iter().map(ToValue::to_value).collect())
+        list(self)
     }
 }
 
 impl<T: ToValue> ToValue for Vec<T> {
     fn to_value(&self) -> Value {
-        Value::List(self.iter().map(ToValue::to_value).collect())
+        list(self)
+    }
+}
+
+impl<T: ToValue, U: ToValue> ToValue for (T, U) {
+    fn to_value(&self) -> Value {
+        cons(&self.0, &self.1)
     }
 }
 
@@ -184,7 +186,7 @@ impl Debug for State {
             match value {
                 &None => write!(f, "_"),
                 &Some(Value::Atom(ref v)) => write!(f, "{:?}", v),
-                &Some(Value::List(ref v)) => write!(f, "{:?}", v),
+                &Some(Value::Cons(ref u, ref v)) => write!(f, "({:?}, {:?})", u, v),
                 &Some(Value::Variable(i)) => write!(f, "(@{})", i),
             }?
         }
@@ -238,15 +240,9 @@ fn unify(u: &Value, v: &Value, s: &State) -> Option<State> {
         (Value::Variable(u), Value::Variable(v)) if u == v => Some(s.clone()),
         (Value::Variable(u), v) => Some(s.extend(u, v)),
         (u, Value::Variable(v)) => Some(s.extend(v, u)),
-        (Value::List(u), Value::List(v)) => {
-            if u.len() != v.len() {
-                return None;
-            }
-            let mut s = s.clone();
-            for i in 0..u.len() {
-                s = unify(&u[i], &v[i], &s)?;
-            }
-            Some(s)
+        (Value::Cons(u1, u2), Value::Cons(v1, v2)) => {
+            let s = unify(&u1, &v1, s)?;
+            unify(&u2, &v2, &s)
         }
         (u @ Value::Atom(_), v @ Value::Atom(_)) if u == v => Some(s.clone()),
         _ => None,
