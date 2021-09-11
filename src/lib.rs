@@ -89,7 +89,7 @@ impl ToValue for Value {
     }
 }
 
-macro_rules! impl_atom {
+macro_rules! impl_atom_to_value {
     ($t:ty) => {
         impl ToValue for $t {
             fn to_value(&self) -> Value {
@@ -99,14 +99,15 @@ macro_rules! impl_atom {
     };
 
     ($t:ty, $($ts:ty),+) => {
-        impl_atom!($t);
-        impl_atom!($($ts),+);
+        impl_atom_to_value!($t);
+        impl_atom_to_value!($($ts),+);
     };
 }
 
-impl_atom!(i8, u8, i16, u16, i32, u32, i64, u64, i128, u128, isize, usize);
-impl_atom!(&'static str);
-impl_atom!(String);
+impl_atom_to_value!(i8, u8, i16, u16, i32, u32, i64, u64, i128, u128, isize, usize);
+impl_atom_to_value!(bool, char);
+impl_atom_to_value!(&'static str);
+impl_atom_to_value!(String);
 
 impl<T: ToValue, const N: usize> ToValue for [T; N] {
     fn to_value(&self) -> Value {
