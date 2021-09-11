@@ -244,7 +244,7 @@ macro_rules! state_inner {
 pub fn eq(
     u: &impl ToValue,
     v: &impl ToValue,
-) -> impl Goal<Iter = impl Iterator<Item = State>> + Clone + 'static {
+) -> impl Goal<Iter = std::option::IntoIter<State>> + Clone + 'static {
     let u = u.to_value();
     let v = v.to_value();
     move |s: &State| unify(&u, &v, s).into_iter()
@@ -267,6 +267,52 @@ fn unify(u: &Value, v: &Value, s: &State) -> Option<State> {
         }
         (u @ Value::Atom(_), v @ Value::Atom(_)) if u == v => Some(s.clone()),
         _ => None,
+    }
+}
+
+/// Goal that introduces inverse-η delay to handle infinite streams.
+pub fn delay<F, G, I>(f: F) -> BoxedGoal<LazyApplication<G, I>>
+where
+    F: Fn() -> G + Clone + 'static,
+    G: Goal<Iter = I>,
+    I: Iterator<Item = State>,
+{
+    (move |s: &State| LazyApplication::new(f(), s.clone())).boxed()
+}
+
+/// A lazy goal application that is not called until first polled for results.
+#[derive(Clone)]
+pub enum LazyApplication<G, I> {
+    /// Lazy goal-state application that returns an iterator.
+    Lazy(G, State),
+    /// Realized iterator returned from the goal.
+    Iterator(I),
+}
+
+impl<G, I> LazyApplication<G, I> {
+    fn new(goal: G, state: State) -> Self {
+        Self::Lazy(goal, state)
+    }
+}
+
+impl<G, I> Iterator for LazyApplication<G, I>
+where
+    G: Goal<Iter = I>,
+    I: Iterator<Item = State>,
+{
+    type Item = State;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let LazyApplication::Lazy(_, _) = self {
+            take_mut::take(self, |value| match value {
+                LazyApplication::Lazy(goal, state) => LazyApplication::Iterator(goal.apply(&state)),
+                LazyApplication::Iterator(_) => unreachable!(),
+            });
+        }
+        match self {
+            LazyApplication::Iterator(it) => it.next(),
+            _ => unreachable!(),
+        }
     }
 }
 
@@ -489,46 +535,5 @@ mod tests {
             value(&[value(&2), value(&"5")]),
         );
         assert_ne!(value(&[2]), value(&[4]));
-    }
-
-    #[test]
-    fn void_goal() {
-        let mut iter = fresh(|x| eq(&x, &x)).run(1);
-        assert_eq!(iter.next(), Some(state![_]));
-        assert_eq!(iter.next(), None);
-    }
-
-    #[test]
-    fn interleaving() {
-        let numbers = |x| eq(&x, &1).or(eq(&x, &2)).or(eq(&x, &3)).boxed();
-
-        let mut iter = fresh(numbers).run(1);
-        assert_eq!(iter.next(), Some(state![1]));
-        assert_eq!(iter.next(), Some(state![3]));
-        assert_eq!(iter.next(), Some(state![2]));
-        assert_eq!(iter.next(), None);
-    }
-
-    #[test]
-    fn two_equal() {
-        let mut iter = fresh(|x, y| eq(&x, &y)).run(2);
-        assert_eq!(iter.next(), Some(state![_, (@0)]));
-        assert_eq!(iter.next(), None);
-    }
-
-    #[test]
-    fn multi_equal() {
-        let mut iter =
-            fresh(|x, y, z, w| eq(&x, &y).and(eq(&z, &w)).or(eq(&x, &z).and(eq(&y, &w)))).run(4);
-        assert_eq!(iter.next(), Some(state![_, (@0), _, (@2)]));
-        assert_eq!(iter.next(), Some(state![_, _, (@0), (@1)]));
-        assert_eq!(iter.next(), None);
-    }
-
-    #[test]
-    fn list_equal() {
-        let mut iter = fresh(|x, y| eq(&[x, y], &["hello", "world"])).run(2);
-        assert_eq!(iter.next(), Some(state!["hello", "world"]));
-        assert_eq!(iter.next(), None);
     }
 }
