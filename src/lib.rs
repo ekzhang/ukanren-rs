@@ -5,6 +5,7 @@
 
 use std::{
     any::Any,
+    cmp::Ordering,
     fmt::{self, Debug},
     rc::Rc,
 };
@@ -151,6 +152,17 @@ impl State {
         }
     }
 
+    fn walk_full(&self, u: &Value) -> Value {
+        match u {
+            Value::Variable(i) => match &self.0[*i] {
+                Some(x) => self.walk_full(x),
+                None => u.clone(),
+            },
+            Value::Cons(u, v) => cons(&self.walk_full(u), &self.walk_full(v)),
+            _ => u.clone(),
+        }
+    }
+
     fn extend(&self, x: usize, v: Value) -> State {
         self.apply(|s| s.set(x, Some(v)).expect("invalid index in extend_state"))
     }
@@ -171,6 +183,11 @@ impl State {
     /// Create a state from a collection of optional values.
     pub fn from_vec(v: impl IntoIterator<Item = Option<Value>>) -> State {
         Self(v.into_iter().collect())
+    }
+
+    /// Return the idempotent first `k` variables from the state.
+    pub fn finish(&self, k: usize) -> State {
+        State::from_vec((0..k).map(|i| self.0[i].as_ref().map(|v| self.walk_full(v))))
     }
 }
 
@@ -237,7 +254,11 @@ fn unify(u: &Value, v: &Value, s: &State) -> Option<State> {
     let u = s.walk(u);
     let v = s.walk(v);
     match (u, v) {
-        (Value::Variable(u), Value::Variable(v)) if u == v => Some(s.clone()),
+        (Value::Variable(u), Value::Variable(v)) => match u.cmp(&v) {
+            Ordering::Equal => Some(s.clone()),
+            Ordering::Greater => Some(s.extend(u, Value::Variable(v))),
+            Ordering::Less => Some(s.extend(v, Value::Variable(u))),
+        },
         (Value::Variable(u), v) => Some(s.extend(u, v)),
         (u, Value::Variable(v)) => Some(s.extend(v, u)),
         (Value::Cons(u1, u2), Value::Cons(v1, v2)) => {
@@ -250,7 +271,7 @@ fn unify(u: &Value, v: &Value, s: &State) -> Option<State> {
 }
 
 /// Goal that introduces one or more fresh relational variables.
-pub fn fresh<F, I, T>(f: F) -> impl Goal<Iter = I> + Clone + 'static
+pub fn fresh<'a, F, I, T>(f: F) -> impl Goal<Iter = I> + Clone + 'a
 where
     F: Fresh<T, Iter = I> + Clone + 'static,
     I: Iterator<Item = State>,
@@ -338,8 +359,14 @@ pub trait Goal {
     }
 
     /// Evaluate this goal on an empty state, returning a stream of results.
-    fn run(&self) -> Self::Iter {
-        self.apply(&State::default())
+    ///
+    /// These results contain normalized forms of the first `k` variables, to
+    /// avoid including auxiliary data that is not relevant to us.
+    fn run(&self, k: usize) -> RunStream<Self::Iter> {
+        RunStream {
+            inner: self.apply(&State::default()),
+            k,
+        }
     }
 }
 
@@ -420,6 +447,23 @@ where
     }
 }
 
+/// Iterator adapter created by [`Goal::run`].
+pub struct RunStream<I> {
+    inner: I,
+    k: usize,
+}
+
+impl<I> Iterator for RunStream<I>
+where
+    I: Iterator<Item = State>,
+{
+    type Item = State;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().map(|s| s.finish(self.k))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -449,7 +493,7 @@ mod tests {
 
     #[test]
     fn void_goal() {
-        let mut iter = fresh(|x| eq(&x, &x)).run();
+        let mut iter = fresh(|x| eq(&x, &x)).run(1);
         assert_eq!(iter.next(), Some(state![_]));
         assert_eq!(iter.next(), None);
     }
@@ -458,7 +502,7 @@ mod tests {
     fn interleaving() {
         let numbers = |x| eq(&x, &1).or(eq(&x, &2)).or(eq(&x, &3)).boxed();
 
-        let mut iter = fresh(numbers).run();
+        let mut iter = fresh(numbers).run(1);
         assert_eq!(iter.next(), Some(state![1]));
         assert_eq!(iter.next(), Some(state![3]));
         assert_eq!(iter.next(), Some(state![2]));
@@ -467,23 +511,23 @@ mod tests {
 
     #[test]
     fn two_equal() {
-        let mut iter = fresh(|x, y| eq(&x, &y)).run();
-        assert_eq!(iter.next(), Some(state![(@1), _]));
+        let mut iter = fresh(|x, y| eq(&x, &y)).run(2);
+        assert_eq!(iter.next(), Some(state![_, (@0)]));
         assert_eq!(iter.next(), None);
     }
 
     #[test]
     fn multi_equal() {
         let mut iter =
-            fresh(|x, y, z, w| eq(&x, &y).and(eq(&z, &w)).or(eq(&x, &z).and(eq(&y, &w)))).run();
-        assert_eq!(iter.next(), Some(state![(@1), _, (@3), _]));
-        assert_eq!(iter.next(), Some(state![(@2), (@3), _, _]));
+            fresh(|x, y, z, w| eq(&x, &y).and(eq(&z, &w)).or(eq(&x, &z).and(eq(&y, &w)))).run(4);
+        assert_eq!(iter.next(), Some(state![_, (@0), _, (@2)]));
+        assert_eq!(iter.next(), Some(state![_, _, (@0), (@1)]));
         assert_eq!(iter.next(), None);
     }
 
     #[test]
     fn list_equal() {
-        let mut iter = fresh(|x, y| eq(&[x, y], &["hello", "world"])).run();
+        let mut iter = fresh(|x, y| eq(&[x, y], &["hello", "world"])).run(2);
         assert_eq!(iter.next(), Some(state!["hello", "world"]));
         assert_eq!(iter.next(), None);
     }
