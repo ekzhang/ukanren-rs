@@ -1,5 +1,7 @@
 # µKanren-rs
 
+![CI](https://github.com/ekzhang/ukanren-rs/workflows/CI/badge.svg?branch=main&event=push)
+
 This is a Rust implementation of µKanren, a featherweight relational programming
 language. See the original Scheme implementation
 [here](https://github.com/jasonhemann/microKanren) for reference.

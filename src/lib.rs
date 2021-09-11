@@ -3,19 +3,24 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-use std::any::Any;
-use std::fmt::Debug;
+use std::{
+    any::Any,
+    fmt::{self, Debug},
+    rc::Rc,
+};
 
 use itertools::{Interleave, Itertools};
-use rpds::vector::Vector;
+use rpds::Vector;
 
 /// An object in µKanren that can be unified.
 #[derive(Debug)]
 pub enum Value {
     /// A variable with a specific ID.
     Variable(usize),
+
     /// An atomic term, compared for basic equality.
     Atom(Box<dyn Atom>),
+
     /// A list containing multiple values.
     List(Vec<Value>),
 }
@@ -47,8 +52,10 @@ impl Eq for Value {}
 pub trait Atom: Debug {
     /// Compare two atomic type references for equality.
     fn eq(&self, other: &dyn Atom) -> bool;
+
     /// Convert this reference to an [`Any`] reference.
     fn as_any(&self) -> &dyn Any;
+
     /// Clone the current atom in boxed form.
     fn box_clone(&self) -> Box<dyn Atom>;
 }
@@ -70,11 +77,23 @@ impl<T: 'static + Eq + Debug + Clone> Atom for T {
     }
 }
 
+/// A type that can be converted to a value.
+pub trait ToValue {
+    /// Convert this type to a value.
+    fn to_value(&self) -> Value;
+}
+
+impl ToValue for Value {
+    fn to_value(&self) -> Value {
+        self.clone()
+    }
+}
+
 macro_rules! impl_atom {
     ($t:ty) => {
-        impl From<$t> for Value {
-            fn from(x: $t) -> Self {
-                Value::Atom(Box::new(x))
+        impl ToValue for $t {
+            fn to_value(&self) -> Value {
+                Value::Atom(Box::new(self.clone()))
             }
         }
     };
@@ -89,9 +108,21 @@ impl_atom!(i8, u8, i16, u16, i32, u32, i64, u64, i128, u128, isize, usize);
 impl_atom!(&'static str);
 impl_atom!(String);
 
-impl<T: Into<Value>> From<Vec<T>> for Value {
-    fn from(v: Vec<T>) -> Self {
-        Value::List(v.into_iter().map(Into::into).collect())
+impl<T: ToValue, const N: usize> ToValue for [T; N] {
+    fn to_value(&self) -> Value {
+        Value::List(self.iter().map(ToValue::to_value).collect())
+    }
+}
+
+impl<T: ToValue> ToValue for [T] {
+    fn to_value(&self) -> Value {
+        Value::List(self.iter().map(ToValue::to_value).collect())
+    }
+}
+
+impl<T: ToValue> ToValue for Vec<T> {
+    fn to_value(&self) -> Value {
+        Value::List(self.iter().map(ToValue::to_value).collect())
     }
 }
 
@@ -99,39 +130,110 @@ impl<T: Into<Value>> From<Vec<T>> for Value {
 ///
 /// We use a persistent vector both for performance reasons, and to satisfy
 /// Rust's ownership rules for [`Value`],
-pub type State = Vector<Option<Value>>;
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct State(Vector<Option<Value>>);
 
-fn walk(u: &Value, s: &State) -> Value {
-    match u {
-        Value::Variable(i) => match &s[*i] {
-            Some(x) => walk(x, s),
-            None => u.clone(),
-        },
-        _ => u.clone(),
+impl State {
+    fn apply(&self, f: impl FnOnce(&Vector<Option<Value>>) -> Vector<Option<Value>>) -> State {
+        State(f(&self.0))
+    }
+
+    fn walk(&self, u: &Value) -> Value {
+        match u {
+            Value::Variable(i) => match &self.0[*i] {
+                Some(x) => self.walk(x),
+                None => u.clone(),
+            },
+            _ => u.clone(),
+        }
+    }
+
+    fn extend(&self, x: usize, v: Value) -> State {
+        self.apply(|s| s.set(x, Some(v)).expect("invalid index in extend_state"))
+    }
+
+    fn add_fresh(&self, n: usize) -> State {
+        self.apply(|s| {
+            let mut s = s.clone();
+            s.extend(std::iter::repeat(None).take(n));
+            s
+        })
+    }
+
+    /// Lookup how many variables are in the state.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Create a state from a collection of optional values.
+    pub fn from_vec(v: impl IntoIterator<Item = Option<Value>>) -> State {
+        Self(v.into_iter().collect())
     }
 }
 
-fn extend_state(x: usize, v: Value, s: &State) -> State {
-    s.set(x, Some(v)).expect("invalid index in extend_state")
+impl Debug for State {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "state![")?;
+        let mut first = true;
+        for value in self.0.iter() {
+            if !first {
+                write!(f, ", ")?;
+            }
+            first = false;
+            match value {
+                &None => write!(f, "_"),
+                &Some(Value::Atom(ref v)) => write!(f, "{:?}", v),
+                &Some(Value::List(ref v)) => write!(f, "{:?}", v),
+                &Some(Value::Variable(i)) => write!(f, "(@{})", i),
+            }?
+        }
+        write!(f, "]")?;
+        Ok(())
+    }
+}
+
+/// Convenience macro for constructing new state objects. This requires the
+/// [`ToValue`] trait to be in scope.
+#[macro_export]
+macro_rules! state {
+    () => {
+        $crate::State::default()
+    };
+    ($($args:tt),+ $(,)?) => {
+        $crate::State::from_vec(::std::vec![
+            $($crate::state_inner!(@STATE; $args)),+
+        ])
+    };
+}
+
+#[macro_export]
+#[doc(hidden)]
+macro_rules! state_inner {
+    (@STATE; _) => {
+        None
+    };
+    (@STATE; (@ $x:expr)) => {
+        Some(Value::Variable($x))
+    };
+    (@STATE; $x:expr) => {
+        Some($x.to_value())
+    };
 }
 
 /// Goal for unifying two values.
-pub fn eq(
-    u: impl Into<Value>,
-    v: impl Into<Value>,
-) -> impl Goal<Iter = impl Iterator<Item = State>> {
-    let u = u.into();
-    let v = v.into();
+pub fn eq(u: &impl ToValue, v: &impl ToValue) -> impl Goal<Iter = impl Iterator<Item = State>> {
+    let u = u.to_value();
+    let v = v.to_value();
     move |s: &State| unify(&u, &v, s).into_iter()
 }
 
 fn unify(u: &Value, v: &Value, s: &State) -> Option<State> {
-    let u = walk(u, s);
-    let v = walk(v, s);
+    let u = s.walk(u);
+    let v = s.walk(v);
     match (u, v) {
         (Value::Variable(u), Value::Variable(v)) if u == v => Some(s.clone()),
-        (Value::Variable(u), v) => Some(extend_state(u, v, s)),
-        (u, Value::Variable(v)) => Some(extend_state(v, u, s)),
+        (Value::Variable(u), v) => Some(s.extend(u, v)),
+        (u, Value::Variable(v)) => Some(s.extend(v, u)),
         (Value::List(_u), Value::List(_v)) => {
             todo!()
         }
@@ -140,17 +242,49 @@ fn unify(u: &Value, v: &Value, s: &State) -> Option<State> {
     }
 }
 
-/// Goal that introduces a fresh relational variable.
-pub fn call_fresh<G, I>(f: impl Fn(Value) -> G) -> impl Goal<Iter = I>
+/// Goal that introduces one or more fresh relational variables.
+pub fn fresh<F, I, T>(f: F) -> impl Goal<Iter = I>
 where
-    G: Goal<Iter = I>,
+    F: Fresh<T, Iter = I>,
     I: Iterator<Item = State>,
 {
-    move |s: &State| {
-        let var = Value::Variable(s.len());
-        f(var).apply(&s.push_back(None))
-    }
+    move |s: &State| f.call_fresh(s)
 }
+
+/// Trait for closures that can take fresh variables.
+///
+/// This is automatically implemented for closures taking up to 8 values.
+pub trait Fresh<T> {
+    /// The iterator returned by the fresh closure.
+    type Iter: Iterator<Item = State>;
+
+    /// Call this closure on an initial state, adding fresh variables.
+    fn call_fresh(&self, s: &State) -> Self::Iter;
+}
+
+macro_rules! impl_fresh {
+    (@VALUE; $num:expr) => {
+        Value
+    };
+    ($len:expr; $($nums:expr),+) => {
+    impl<F, G, I> Fresh<($(impl_fresh!(@VALUE; $nums),)+)> for F
+        where
+            F: Fn($(impl_fresh!(@VALUE; $nums),)+) -> G,
+            G: Goal<Iter = I>,
+            I: Iterator<Item = State>,
+        {
+            type Iter = I;
+
+            fn call_fresh(&self, s: &State) -> Self::Iter {
+                let len = s.len();
+                self($(Value::Variable(len + $nums)),+).apply(&s.add_fresh($len))
+            }
+        }
+    };
+}
+
+impl_fresh!(1; 0);
+impl_fresh!(2; 0, 1);
 
 /// A goal that can be executed by the relational system.
 pub trait Goal {
@@ -158,7 +292,7 @@ pub trait Goal {
     type Iter: Iterator<Item = State>;
 
     /// Apply this goal to an initial state, returning a stream of satisfying states.
-    fn apply(self, s: &State) -> Self::Iter;
+    fn apply(&self, s: &State) -> Self::Iter;
 
     /// Take the conjunction of this goal with another.
     fn and<G, I>(self, other: G) -> And<Self, G>
@@ -179,6 +313,21 @@ pub trait Goal {
     {
         Or(self, other)
     }
+
+    /// Box this goal, which simplifies types at the expense of performance.
+    fn boxed(self) -> BoxedGoal<Self::Iter>
+    where
+        Self: Sized + 'static,
+    {
+        BoxedGoal {
+            inner: Rc::new(self),
+        }
+    }
+
+    /// Evaluate this goal on an empty state, returning a stream of results.
+    fn run(&self) -> Self::Iter {
+        self.apply(&State::default())
+    }
 }
 
 impl<G, I> Goal for G
@@ -188,7 +337,7 @@ where
 {
     type Iter = I;
 
-    fn apply(self, s: &State) -> I {
+    fn apply(&self, s: &State) -> I {
         self(s)
     }
 }
@@ -208,8 +357,9 @@ where
     // have stable generic associated types (GAT) or higher-kinded types.
     type Iter = std::iter::FlatMap<I1, I2, Box<dyn Fn(State) -> I2>>;
 
-    fn apply(self, s: &State) -> Self::Iter {
+    fn apply(&self, s: &State) -> Self::Iter {
         let Self(g1, g2) = self;
+        let g2 = g2.clone();
         g1.apply(s)
             .flat_map(Box::new(move |s| g2.clone().apply(&s)))
     }
@@ -228,8 +378,32 @@ where
 {
     type Iter = Interleave<I1, I2>;
 
-    fn apply(self, s: &State) -> Self::Iter {
+    fn apply(&self, s: &State) -> Self::Iter {
         self.0.apply(s).interleave(self.1.apply(s))
+    }
+}
+
+/// A boxed goal for type erasure, constructed from [`Goal::boxed`].
+pub struct BoxedGoal<T> {
+    inner: Rc<dyn Goal<Iter = T>>,
+}
+
+impl<T> Clone for BoxedGoal<T> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Rc::clone(&self.inner),
+        }
+    }
+}
+
+impl<T> Goal for BoxedGoal<T>
+where
+    T: Iterator<Item = State> + 'static,
+{
+    type Iter = Box<dyn Iterator<Item = State>>;
+
+    fn apply(&self, s: &State) -> Self::Iter {
+        Box::new(self.inner.apply(s))
     }
 }
 
@@ -237,22 +411,51 @@ where
 mod tests {
     use super::*;
 
+    fn value(v: &impl ToValue) -> Value {
+        v.to_value()
+    }
+
     #[test]
     fn atom_cmp() {
-        assert_eq!(Value::from(2), Value::from(2));
-        assert_eq!(Value::from(-42i8), Value::from(-42i8));
-        assert_eq!(Value::from("hello"), Value::from("hello"));
-        assert_ne!(Value::from(-42), Value::from(-42i8));
-        assert_ne!(Value::from("hello"), Value::from(1));
+        assert_eq!(value(&2), value(&2));
+        assert_eq!(value(&-42i8), value(&-42i8));
+        assert_eq!(value(&"hello"), value(&"hello"));
+        assert_ne!(value(&-42), value(&-42i8));
+        assert_ne!(value(&"hello"), value(&1));
     }
 
     #[test]
     fn list_cmp() {
-        assert_eq!(Value::from(vec![2, 5, 6]), Value::from(vec![2, 5, 6]));
+        assert_eq!(value(&[2, 5, 6]), value(&[2, 5, 6]));
         assert_eq!(
-            Value::from(vec![Value::from(2), Value::from("5")]),
-            Value::from(vec![Value::from(2), Value::from("5")]),
+            value(&[value(&2), value(&"5")]),
+            value(&[value(&2), value(&"5")]),
         );
-        assert_ne!(Value::from(vec![2]), Value::from(vec![4]));
+        assert_ne!(value(&[2]), value(&[4]));
+    }
+
+    #[test]
+    fn void_goal() {
+        let mut iter = fresh(|x| eq(&x, &x)).run();
+        assert_eq!(iter.next(), Some(state![_]));
+        assert_eq!(iter.next(), None);
+    }
+
+    #[test]
+    fn interleaving() {
+        let numbers = |x| eq(&x, &1).or(eq(&x, &2)).or(eq(&x, &3)).boxed();
+
+        let mut iter = fresh(numbers).run();
+        assert_eq!(iter.next(), Some(state![1]));
+        assert_eq!(iter.next(), Some(state![3]));
+        assert_eq!(iter.next(), Some(state![2]));
+        assert_eq!(iter.next(), None);
+    }
+
+    #[test]
+    fn two_equal() {
+        let mut iter = fresh(|x, y| eq(&x, &y)).run();
+        assert_eq!(iter.next(), Some(state![(@1), _]));
+        assert_eq!(iter.next(), None);
     }
 }
