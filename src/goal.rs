@@ -14,6 +14,15 @@ pub trait Goal {
     fn apply(&self, s: &State) -> Self::Iter;
 
     /// Take the conjunction of this goal with another.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use ukanren::{eq, fresh, Goal};
+    ///
+    /// // Goal where `x` is equal to `5` and `y` is equal to `6`.
+    /// fresh(|x, y| eq(&x, &5).and(eq(&y, &6)));
+    /// ```
     fn and<G, I>(self, other: G) -> And<Self, G>
     where
         Self: Sized,
@@ -24,6 +33,15 @@ pub trait Goal {
     }
 
     /// Take the disjunction of this goal with another.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use ukanren::{eq, fresh, Goal};
+    ///
+    /// // Goal where `x` is equal to `5` or `x` is equal to `6`.
+    /// fresh(|x| eq(&x, &5).or(eq(&x, &6)));
+    /// ```
     fn or<G, I>(self, other: G) -> Or<Self, G>
     where
         Self: Sized,
@@ -33,7 +51,17 @@ pub trait Goal {
         Or(self, other)
     }
 
-    /// Box this goal, which simplifies types at the expense of performance.
+    /// Box this goal into a trait object, making it easier to name the type.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use ukanren::{eq, BoxedGoal, Goal, Value, State};
+    ///
+    /// fn animalo(x: Value) -> BoxedGoal<impl Iterator<Item = State>> {
+    ///     eq(&x, &"dog").or(eq(&x, &"cat")).boxed()
+    /// }
+    /// ```
     fn boxed(self) -> BoxedGoal<Self::Iter>
     where
         Self: Sized + 'static,
@@ -47,6 +75,10 @@ pub trait Goal {
     ///
     /// These results contain normalized forms of the first `k` variables, to
     /// avoid including auxiliary data that is not relevant to us.
+    ///
+    /// This is a low-level function. Instead of calling this function directly,
+    /// you should probably use the top-level [`run`] function instead, which
+    /// infers the value of `k` from your input.
     fn run(&self, k: usize) -> RunStream<Self::Iter> {
         RunStream {
             inner: self.apply(&State::default()),
@@ -68,6 +100,7 @@ where
 }
 
 /// A goal constructed from the conjunction of two goals.
+#[doc(hidden)]
 #[derive(Clone, Copy)]
 pub struct And<G1, G2>(G1, G2);
 
@@ -91,6 +124,7 @@ where
 }
 
 /// A goal constructed from the disjunction of two goals.
+#[doc(hidden)]
 #[derive(Clone, Copy)]
 pub struct Or<G1, G2>(G1, G2);
 
@@ -133,6 +167,7 @@ where
 }
 
 /// Iterator adapter created by [`Goal::run`].
+#[doc(hidden)]
 pub struct RunStream<I> {
     inner: I,
     k: usize,
@@ -150,6 +185,14 @@ where
 }
 
 /// Goal for unifying two values.
+///
+/// # Example
+///
+/// ```
+/// use ukanren::{eq, fresh};
+///
+/// fresh(|x| eq(&x, &42));
+/// ```
 pub fn eq(
     u: &impl ToValue,
     v: &impl ToValue,
@@ -180,6 +223,17 @@ fn unify(u: &Value, v: &Value, s: &State) -> Option<State> {
 }
 
 /// Goal that introduces inverse-η delay to handle infinite streams.
+///
+/// # Example
+///
+/// ```
+/// use ukanren::{delay, eq, BoxedGoal, Goal, State, Value};
+///
+/// // Outputs an infinite stream of states where `x = 5`.
+/// fn fives(x: Value) -> BoxedGoal<impl Iterator<Item = State>> {
+///     eq(&x, &5).or(delay(move || fives(x.clone()))).boxed()
+/// }
+/// ```
 pub fn delay<F, G, I>(f: F) -> BoxedGoal<LazyApplication<G, I>>
 where
     F: Fn() -> G + Clone + 'static,
@@ -190,6 +244,7 @@ where
 }
 
 /// A lazy goal application that is not called until first polled for results.
+#[doc(hidden)]
 #[derive(Clone)]
 pub enum LazyApplication<G, I> {
     /// Lazy goal-state application that returns an iterator.
@@ -280,6 +335,18 @@ impl_fresh!(11; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
 impl_fresh!(12; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
 
 /// Top-level entry point for running a goal with fresh variables.
+///
+/// # Example
+///
+/// ```
+/// use ukanren::{eq, run, state, Goal, ToValue};
+///
+/// let mut iter = run(|x| eq(&x, &5).or(eq(&x, &6)));
+///
+/// assert_eq!(iter.next(), Some(state![5]));
+/// assert_eq!(iter.next(), Some(state![6]));
+/// assert_eq!(iter.next(), None);
+/// ```
 pub fn run<F, I, const N: usize>(f: F) -> RunStream<I>
 where
     F: Fresh<N, Iter = I> + Clone,
