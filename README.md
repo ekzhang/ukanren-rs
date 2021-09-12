@@ -13,14 +13,16 @@ language. See the original Scheme implementation
 
 - Structural unification of Scheme-like cons cells.
 - Streams implemented with the `Iterator` trait.
+- State representation using a persistent vector with triangular substitutions.
 - Conjunction, disjunction, and `fresh` based on traits (macro-free API).
+- Lazy goal evaluation using inverse-η delay.
 - Integer, `bool`, `char`, `&str`, and unit type atoms.
 - Explicit `ToValue` trait that converts vectors and arrays into cons-lists.
 - Convenience macro `state!` to inspect and specify state.
 
 ## Usage
 
-Here's a simple example, defining and using the `appendo` predicate.
+Here's a simple example, which defines and uses the `appendo` predicate.
 
 ```rust
 use ukanren::*;
@@ -28,12 +30,10 @@ use ukanren::*;
 fn appendo(first: Value, second: Value, out: Value) -> BoxedGoal<impl Iterator<Item = State>> {
     eq(&first, &())
         .and(eq(&second, &out))
-        .or(fresh(move |a: Value, d: Value| {
-            let out = out.clone();
-            let second = second.clone();
-            eq(&(a.clone(), d.clone()), &first).and(fresh(move |res: Value| {
-                eq(&(a.clone(), res.clone()), &out).and(appendo(d.clone(), second.clone(), res))
-            }))
+        .or(fresh(move |a: Value, d: Value, res: Value| {
+            eq(&(a.clone(), d.clone()), &first)
+                .and(eq(&(a.clone(), res.clone()), &out))
+                .and(appendo(d.clone(), second.clone(), res))
         }))
         .boxed()
 }

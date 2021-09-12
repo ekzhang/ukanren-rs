@@ -3,12 +3,10 @@ use ukanren::*;
 fn appendo(first: Value, second: Value, out: Value) -> BoxedGoal<impl Iterator<Item = State>> {
     eq(&first, &())
         .and(eq(&second, &out))
-        .or(fresh(move |a: Value, d: Value| {
-            let out = out.clone();
-            let second = second.clone();
-            eq(&(a.clone(), d.clone()), &first).and(fresh(move |res: Value| {
-                eq(&(a.clone(), res.clone()), &out).and(appendo(d.clone(), second.clone(), res))
-            }))
+        .or(fresh(move |a: Value, d: Value, res: Value| {
+            eq(&(a.clone(), d.clone()), &first)
+                .and(eq(&(a.clone(), res.clone()), &out))
+                .and(appendo(d.clone(), second.clone(), res))
         }))
         .boxed()
 }
@@ -53,12 +51,10 @@ fn inverse_append() {
 fn reverseo(first: Value, second: Value) -> BoxedGoal<impl Iterator<Item = State>> {
     eq(&first, &())
         .and(eq(&second, &()))
-        .or(fresh(move |a: Value, d: Value| {
-            let second = second.clone();
-            eq(&(a.clone(), d.clone()), &first).and(fresh(move |rd: Value| {
-                appendo(rd.clone(), (a.clone(), ()).to_value(), second.clone())
-                    .and(reverseo(d.clone(), rd.clone()))
-            }))
+        .or(fresh(move |a: Value, d: Value, rd: Value| {
+            eq(&(a.clone(), d.clone()), &first)
+                .and(appendo(rd.clone(), cons(&a.clone(), &()), second.clone()))
+                .and(reverseo(d.clone(), rd.clone()))
         }))
         .boxed()
 }
