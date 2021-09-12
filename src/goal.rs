@@ -226,9 +226,9 @@ where
 }
 
 /// Goal that introduces one or more fresh relational variables.
-pub fn fresh<'a, F, I, const N: u8>(f: F) -> impl Goal<Iter = I> + Clone + 'a
+pub fn fresh<F, I, const N: usize>(f: F) -> impl Goal<Iter = I> + Clone
 where
-    F: Fresh<N, Iter = I> + Clone + 'static,
+    F: Fresh<N, Iter = I> + Clone,
     I: Iterator<Item = State>,
 {
     move |s: &State| f.call_fresh(s)
@@ -237,7 +237,7 @@ where
 /// Trait for closures that can take fresh variables.
 ///
 /// This is automatically implemented for closures taking up to 12 values.
-pub trait Fresh<const N: u8> {
+pub trait Fresh<const N: usize> {
     /// The iterator returned by the fresh closure.
     type Iter: Iterator<Item = State>;
 
@@ -278,3 +278,12 @@ impl_fresh!(9; 0, 1, 2, 3, 4, 5, 6, 7, 8);
 impl_fresh!(10; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9);
 impl_fresh!(11; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
 impl_fresh!(12; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
+
+/// Top-level entry point for running a goal with fresh variables.
+pub fn run<F, I, const N: usize>(f: F) -> RunStream<I>
+where
+    F: Fresh<N, Iter = I> + Clone,
+    I: Iterator<Item = State>,
+{
+    (move |s: &State| f.call_fresh(s)).run(N)
+}

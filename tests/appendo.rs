@@ -5,38 +5,37 @@ fn appendo(first: Value, second: Value, out: Value) -> BoxedGoal<impl Iterator<I
         .and(eq(&second, &out))
         .or(fresh(move |a: Value, d: Value, res: Value| {
             eq(&(a.clone(), d.clone()), &first)
-                .and(eq(&(a.clone(), res.clone()), &out))
-                .and(appendo(d.clone(), second.clone(), res))
+                .and(eq(&(a, res.clone()), &out))
+                .and(appendo(d, second.clone(), res))
         }))
         .boxed()
 }
 
 #[test]
 fn forward_append() {
-    let mut iter = fresh(|x| appendo([1, 2].to_value(), [3, 4].to_value(), x)).run(1);
+    let mut iter = run(|x| appendo([1, 2].to_value(), [3, 4].to_value(), x));
     assert_eq!(iter.next(), Some(state![[1, 2, 3, 4]]));
     assert_eq!(iter.next(), None);
 }
 
 #[test]
 fn guess_hole() {
-    let mut iter = fresh(|x| {
+    let mut iter = run(|x| {
         appendo(
             [1, 2].to_value(),
             [x, 4.to_value()].to_value(),
             [1, 2, 3, 4].to_value(),
         )
-    })
-    .run(1);
+    });
     assert_eq!(iter.next(), Some(state![3]));
     assert_eq!(iter.next(), None);
 }
 
 #[test]
 fn inverse_append() {
-    let goal = fresh(|x, y| appendo(x, y, [1, 2, 3, 4, 5].to_value()));
+    let iter = run(|x, y| appendo(x, y, [1, 2, 3, 4, 5].to_value()));
     assert_eq!(
-        goal.run(2).collect::<Vec<_>>(),
+        iter.collect::<Vec<_>>(),
         vec![
             state![(), [1, 2, 3, 4, 5]],
             state![[1], [2, 3, 4, 5]],
@@ -53,23 +52,20 @@ fn reverseo(first: Value, second: Value) -> BoxedGoal<impl Iterator<Item = State
         .and(eq(&second, &()))
         .or(fresh(move |a: Value, d: Value, rd: Value| {
             eq(&(a.clone(), d.clone()), &first)
-                .and(appendo(rd.clone(), cons(&a.clone(), &()), second.clone()))
-                .and(reverseo(d.clone(), rd.clone()))
+                .and(appendo(rd.clone(), cons(&a, &()), second.clone()))
+                .and(reverseo(d, rd))
         }))
         .boxed()
 }
 
 #[test]
 fn reverse_basic() {
-    let goal = fresh(|x| reverseo(x, [1, 2, 3, 4, 5].to_value()));
-    assert_eq!(
-        goal.run(1).collect::<Vec<_>>(),
-        vec![state![[5, 4, 3, 2, 1]]],
-    );
+    let iter = run(|x| reverseo(x, [1, 2, 3, 4, 5].to_value()));
+    assert_eq!(iter.collect::<Vec<_>>(), vec![state![[5, 4, 3, 2, 1]]]);
 }
 
 #[test]
 fn palindrome() {
-    let goal = fresh(|x: Value| reverseo(x.clone(), x));
-    assert!(goal.run(1).take(10).collect::<Vec<_>>().len() == 10);
+    let iter = run(|x: Value| reverseo(x.clone(), x));
+    assert!(iter.take(10).count() == 10);
 }

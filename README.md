@@ -32,15 +32,15 @@ fn appendo(first: Value, second: Value, out: Value) -> BoxedGoal<impl Iterator<I
         .and(eq(&second, &out))
         .or(fresh(move |a: Value, d: Value, res: Value| {
             eq(&(a.clone(), d.clone()), &first)
-                .and(eq(&(a.clone(), res.clone()), &out))
-                .and(appendo(d.clone(), second.clone(), res))
+                .and(eq(&(a, res.clone()), &out))
+                .and(appendo(d, second.clone(), res))
         }))
         .boxed()
 }
 
-let goal = fresh(|x, y| appendo(x, y, [1, 2, 3, 4, 5].to_value()));
+let iter = run(|x, y| appendo(x, y, [1, 2, 3, 4, 5].to_value()));
 assert_eq!(
-    goal.run(2).collect::<Vec<_>>(),
+    iter.collect::<Vec<_>>(),
     vec![
         state![(), [1, 2, 3, 4, 5]],
         state![[1], [2, 3, 4, 5]],
