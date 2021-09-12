@@ -1,6 +1,6 @@
 [package]
 name = "ukanren"
-version = "0.0.4"
+version = "0.0.5-alpha.0"
 authors = ["Eric Zhang <ekzhang1@gmail.com>"]
 license = "MIT"
 description = "Rust implementation of µKanren, a featherweight relational programming language."
