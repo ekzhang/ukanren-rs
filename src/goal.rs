@@ -226,9 +226,9 @@ where
 }
 
 /// Goal that introduces one or more fresh relational variables.
-pub fn fresh<'a, F, I, T>(f: F) -> impl Goal<Iter = I> + Clone + 'a
+pub fn fresh<'a, F, I, const N: u8>(f: F) -> impl Goal<Iter = I> + Clone + 'a
 where
-    F: Fresh<T, Iter = I> + Clone + 'static,
+    F: Fresh<N, Iter = I> + Clone + 'static,
     I: Iterator<Item = State>,
 {
     move |s: &State| f.call_fresh(s)
@@ -236,8 +236,8 @@ where
 
 /// Trait for closures that can take fresh variables.
 ///
-/// This is automatically implemented for closures taking up to 8 values.
-pub trait Fresh<T> {
+/// This is automatically implemented for closures taking up to 12 values.
+pub trait Fresh<const N: u8> {
     /// The iterator returned by the fresh closure.
     type Iter: Iterator<Item = State>;
 
@@ -250,7 +250,7 @@ macro_rules! impl_fresh {
         Value
     };
     ($len:expr; $($nums:expr),+) => {
-    impl<F, G, I> Fresh<($(impl_fresh!(@VALUE; $nums),)+)> for F
+        impl<F, G, I> Fresh<$len> for F
         where
             F: Fn($(impl_fresh!(@VALUE; $nums),)+) -> G,
             G: Goal<Iter = I>,
@@ -274,3 +274,7 @@ impl_fresh!(5; 0, 1, 2, 3, 4);
 impl_fresh!(6; 0, 1, 2, 3, 4, 5);
 impl_fresh!(7; 0, 1, 2, 3, 4, 5, 6);
 impl_fresh!(8; 0, 1, 2, 3, 4, 5, 6, 7);
+impl_fresh!(9; 0, 1, 2, 3, 4, 5, 6, 7, 8);
+impl_fresh!(10; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9);
+impl_fresh!(11; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+impl_fresh!(12; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
