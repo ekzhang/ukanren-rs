@@ -7,7 +7,8 @@
 
 This is a Rust implementation of µKanren, a featherweight relational programming
 language. See the original Scheme implementation
-[here](https://github.com/jasonhemann/microKanren) for reference.
+[here](http://webyrd.net/scheme-2013/papers/HemannMuKanren2013.pdf) for
+reference.
 
 ## Features
 
