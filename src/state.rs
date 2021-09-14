@@ -94,17 +94,19 @@ impl Debug for State {
     }
 }
 
-/// Convenience macro for constructing new state objects. This requires the
-/// `ToValue` trait to be in scope.
+/// Convenience macro for making state objects using the `ToValue` trait.
 #[macro_export]
 macro_rules! state {
     () => {
         $crate::State::default()
     };
     ($($args:tt),+ $(,)?) => {
-        $crate::State::from_vec(::std::vec![
-            $($crate::state_inner!(@STATE; $args)),+
-        ])
+        {
+            use $crate::ToValue;
+            $crate::State::from_vec(::std::vec![
+                $($crate::state_inner!(@STATE; $args)),+
+            ])
+        }
     };
 }
 

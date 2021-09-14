@@ -339,7 +339,7 @@ impl_fresh!(12; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
 /// # Example
 ///
 /// ```
-/// use ukanren::{eq, run, state, Goal, ToValue};
+/// use ukanren::{eq, run, state, Goal};
 ///
 /// let mut iter = run(|x| eq(&x, &5).or(eq(&x, &6)));
 ///
